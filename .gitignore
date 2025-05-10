@@ -33,3 +33,8 @@ doc/messages.txt
 
 # clangd turds
 .cache/
+
+# Local development files
+build_opensta.sh
+instructs..md
+navigate.md

@@ -437,6 +437,14 @@ public:
   // New public method for TNS by path group calculation
   void findTotalNegativeSlacksByPathGroup();
 
+  // For TNS per path group feature
+  Slack totalNegativeSlack(const PathGroup *path_group, const MinMax *min_max);
+  void reportTotalNegativeSlacks(const PathGroup *path_group,
+                                 const MinMaxAll *min_max,
+                                 int digits);
+  void reportTotalNegativeSlacksByPathGroup(const MinMaxAll *min_max,
+                                           int digits);
+
 protected:
   void init(StaState *sta);
   void initVars();

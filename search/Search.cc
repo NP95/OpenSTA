@@ -4061,89 +4061,105 @@ Search::findTotalNegativeSlacksByPathGroup()
 {
   if (path_group_tns_exists_) {
     if (invalid_path_group_tns_ && invalid_path_group_tns_->empty()) {
-        return;
+        return; // Already computed and no invalidations
     }
+    // Clear old values if recomputing due to invalidations
     path_group_tns_.clear();
     path_group_tns_slacks_.clear();
     if (invalid_path_group_tns_) {
-        invalid_path_group_tns_->clear(); 
+        invalid_path_group_tns_->clear();
     }
   }
 
   Stats stats(debug_, report_);
   stats.report("Find total negative slacks by path group");
 
-  PathGroups *current_path_groups = this->path_groups_; 
+  PathGroups *current_path_groups = this->path_groups_;
   if (current_path_groups == nullptr) {
-    this->makePathGroupsDefault(); 
-    current_path_groups = this->path_groups_; 
-  }
-
-  path_group_tns_.clear();
-  path_group_tns_slacks_.clear();
-  if (invalid_path_group_tns_) {
-    invalid_path_group_tns_->clear();
-  } else {
-    invalid_path_group_tns_ = new VertexSet(graph_);
-  }
-
-  if (current_path_groups) {
-    std::set<PathGroup*> unique_path_groups_to_process;
-
-    Sdc *sdc_inst = this->sdc(); 
-
-    for (const MinMax* min_max_ptr : MinMax::range()) { 
-      if (sdc_inst) {
-        const ClockSeq &clocks = sdc_inst->clks(); 
-        for (Clock *clk : clocks) {
-          PathGroup *pg = current_path_groups->findPathGroup(clk->name(), min_max_ptr);
-          if (pg) {
-            unique_path_groups_to_process.insert(pg);
-          }
-        }
-      }
-
-      PathGroup *pg_path_delay = current_path_groups->findPathGroup(PathGroups::pathDelayGroupName(), min_max_ptr);
-      if (pg_path_delay) unique_path_groups_to_process.insert(pg_path_delay);
-
-      PathGroup *pg_gated_clk = current_path_groups->findPathGroup(PathGroups::gatedClkGroupName(), min_max_ptr);
-      if (pg_gated_clk) unique_path_groups_to_process.insert(pg_gated_clk);
-      
-      PathGroup *pg_unconstrained = current_path_groups->findPathGroup(PathGroups::unconstrainedPathGroupName(), min_max_ptr);
-      if (pg_unconstrained) unique_path_groups_to_process.insert(pg_unconstrained);
+    this->makePathGroupsDefault();
+    current_path_groups = this->path_groups_;
+    if (current_path_groups == nullptr) {
+        report_->warn(333, "No path groups defined, cannot report TNS by path group.");
+        path_group_tns_exists_ = true; // Mark as 'computed' to avoid re-entry if no groups
+        if (!invalid_path_group_tns_) invalid_path_group_tns_ = new VertexSet(graph_);
+        return;
     }
+  }
 
-    for (PathGroup *pg : unique_path_groups_to_process) {
-      if (pg) {
-        Slack total_slack = 0.0;
-        PathGroupIterator* pg_iter_ptr = pg->iterator(); 
-        if (pg_iter_ptr) {
-          while (pg_iter_ptr->hasNext()) {
-            PathEnd *path_end = pg_iter_ptr->next();
-            // Assuming PathEnd has isUnconstrained() method as a replacement for isNoClkPath()
-            if (path_end && !path_end->isUnconstrained()) { 
-              Slack slack = path_end->slack(this);
-              if (slack < 0) {
-                total_slack += slack;
-                Vertex* endpoint_vertex = path_end->vertex(this);
-                PathAnalysisPt* path_ap = path_end->pathAnalysisPt(this);
-                if (path_ap) { // Check path_ap is not null
-                    PathAPIndex path_ap_idx = path_ap->index(); 
-                    path_group_tns_slacks_[pg][path_ap_idx][endpoint_vertex] = slack;
-                } // else: handle null path_ap if necessary
-              }
+  // Collect all relevant path groups to process
+  std::set<PathGroup*> unique_path_groups_to_process;
+  Sdc* sdc_inst = this->sdc(); // Use this->sdc() to get Sdc instance
+
+  for (const MinMax* min_max_ptr : MinMax::range()) {
+    if (sdc_inst) { // Check if sdc_inst is not null
+      for (const Clock* clk : sdc_inst->clks()) {
+        PathGroup *pg = current_path_groups->findPathGroup(clk->name(), min_max_ptr);
+        if (pg) unique_path_groups_to_process.insert(pg);
+      }
+    }
+    // Add special groups by name for the current min_max_ptr
+    PathGroup *pg_path_delay = current_path_groups->findPathGroup(PathGroups::pathDelayGroupName(), min_max_ptr);
+    if (pg_path_delay) unique_path_groups_to_process.insert(pg_path_delay);
+
+    PathGroup *pg_gated_clk = current_path_groups->findPathGroup(PathGroups::gatedClkGroupName(), min_max_ptr);
+    if (pg_gated_clk) unique_path_groups_to_process.insert(pg_gated_clk);
+
+    PathGroup *pg_async = current_path_groups->findPathGroup(PathGroups::asyncPathGroupName(), min_max_ptr);
+    if (pg_async) unique_path_groups_to_process.insert(pg_async);
+
+    PathGroup *pg_unconstrained = current_path_groups->findPathGroup(PathGroups::unconstrainedPathGroupName(), min_max_ptr);
+    if (pg_unconstrained) unique_path_groups_to_process.insert(pg_unconstrained);
+  }
+
+
+  // Initialize TNS data structures for each path group
+  for (PathGroup *pg : unique_path_groups_to_process) {
+    if (pg) {
+      path_group_tns_[pg].resize(corners_->pathAnalysisPtCount(), 0.0);
+      path_group_tns_slacks_[pg].resize(corners_->pathAnalysisPtCount());
+      for (int i = 0; i < corners_->pathAnalysisPtCount(); ++i) {
+        path_group_tns_slacks_[pg][i].clear();
+      }
+    }
+  }
+
+  // Re-ensure arrivals and requireds if they don't exist or are invalid
+  if (!arrivals_exist_ || (invalid_arrivals_ && !invalid_arrivals_->empty())) {
+    findAllArrivals();
+  }
+  if (!requireds_exist_ || (invalid_requireds_ && !invalid_requireds_->empty())) {
+    findRequireds();
+  }
+
+  for (PathGroup *pg : unique_path_groups_to_process) {
+    if (!pg) continue;
+
+    const PathEndSeq &path_ends = pg->pathEnds(); // Corrected: Use const PathEndSeq&
+    // Iterate over the path_ends directly
+    for (PathEnd *path_end : path_ends) { // Corrected: Iterate over const reference
+        if (path_end && !path_end->isUnconstrained()) { // Corrected: Use isUnconstrained()
+          Vertex *endpoint_vertex = path_end->vertex(this);
+          const PathAnalysisPt *path_ap = path_end->pathAnalysisPt(this);
+          if (endpoint_vertex && path_ap) {
+            PathAPIndex path_ap_idx = path_ap->index();
+            Slack slack = path_end->slack(this);
+
+            if (slack < 0.0) {
+              path_group_tns_[pg][path_ap_idx] += slack;
+              path_group_tns_slacks_[pg][path_ap_idx][endpoint_vertex] = slack;
             }
           }
-          delete pg_iter_ptr; 
         }
-        path_group_tns_[pg] = SlackSeq(1, total_slack); 
       }
-    }
   }
+
   path_group_tns_exists_ = true;
-  if (invalid_path_group_tns_) {
-    invalid_path_group_tns_->clear(); 
+  if (!invalid_path_group_tns_) {
+    invalid_path_group_tns_ = new VertexSet(graph_);
+  } else {
+    invalid_path_group_tns_->clear(); // Clear after full recompute
   }
+  stats.report("Find total negative slacks by path group complete");
 }
 
 ////////////////////////////////////////////////////////////////
@@ -4239,7 +4255,7 @@ Search::makePathGroupsDefault()
 class SearchPathGroupCollectorVisitor : public PathEndVisitor {
 public:
     SearchPathGroupCollectorVisitor(const PathAnalysisPt* path_ap, Search* search_ptr)
-        : /* PathEndVisitor base constructor removed */ path_ap_(path_ap), search_(search_ptr), sta_(search_ptr) {}
+        : /* PathEndVisitor base constructor removed */ path_ap_(path_ap), search_(search_ptr) {} // Removed sta_ initialization
 
     virtual PathEndVisitor *copy() const override {
         return new SearchPathGroupCollectorVisitor(path_ap_, search_);
@@ -4264,7 +4280,7 @@ public:
 private:
     const PathAnalysisPt* path_ap_;
     Search* search_; 
-    const StaState* sta_; 
+    // const StaState* sta_; // Removed unused member
     std::set<PathGroup*> collected_path_groups_;
 };
 
