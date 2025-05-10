@@ -26,6 +26,8 @@
 
 #include <mutex>
 #include <atomic>
+#include <map>
+#include <set>
 
 #include "MinMax.hh"
 #include "UnorderedSet.hh"
@@ -61,8 +63,14 @@ class DcalcAnalysisPt;
 class VisitPathEnds;
 class GatedClk;
 class CheckCrpr;
-class Genclks;
 class Corner;
+class LibertyCellAreaMap;
+class LibertyVisitor;
+class ClksArrivalsIter;
+class PathGroup;
+class VertexSet;
+class Genclks;
+class PathExpanded;
 
 typedef Set<ClkInfo*, ClkInfoLess> ClkInfoSet;
 typedef UnorderedSet<Tag*, TagHash, TagEqual> TagSet;
@@ -71,6 +79,7 @@ typedef Map<Vertex*, Slack> VertexSlackMap;
 typedef Vector<VertexSlackMap> VertexSlackMapSeq;
 typedef Vector<WorstSlacks> WorstSlacksSeq;
 typedef std::vector<DelayDbl> DelayDblSeq;
+typedef Vector<Slack> SlackSeq;
 
 class Search : public StaState
 {
@@ -213,6 +222,9 @@ public:
   PathGroup *findPathGroup(const Clock *clk,
 			   const MinMax *min_max) const;
 
+  // Getter for path_groups_ to be used by SearchPathGroupCollectorVisitor
+  PathGroups *getPathGroups() const { return path_groups_; }
+
   ////////////////////////////////////////////////////////////////
   //
   // Somewhat protected functions.
@@ -221,6 +233,7 @@ public:
 
   // Find arrivals for the clock tree.
   void findClkArrivals();
+  PathGroups *makePathGroupsDefault();
   void seedArrival(Vertex *vertex);
   EvalPred *evalPred() const { return eval_pred_; }
   SearchPred *searchAdj() const { return search_adj_; }
@@ -408,6 +421,22 @@ public:
   void setTagGroupIndex(const Vertex *vertex,
                         TagGroupIndex tag_index);
 
+  ClksArrivalsIter clkArrivalsIter(const Clock *clk,
+                                   const MinMax *min_max);
+
+  void reportPinTiming(const Pin *pin);
+  void reportNetDelays(const Net *net);
+  void reportPinDelays(const Pin *pin);
+  void reportDelayCalc(PathExpanded *path);
+  void reportDelayCalc(PathExpanded *path,
+                       int digits);
+  void checkCrprEnabled() const;
+  void checkCrprDisabled() const;
+  void checkPortFaninFanouts();
+
+  // New public method for TNS by path group calculation
+  void findTotalNegativeSlacksByPathGroup();
+
 protected:
   void init(StaState *sta);
   void initVars();
@@ -561,7 +590,7 @@ protected:
   void worstSlackPreamble();
   void deleteWorstSlacks();
   void updateWorstSlacks(Vertex *vertex,
-			 Slack slacks);
+			 SlackSeq &slacks);
   void updateTns(Vertex *vertex,
 		 SlackSeq &slacks);
   void tnsIncr(Vertex *vertex,
@@ -663,6 +692,40 @@ protected:
   GatedClk *gated_clk_;
   CheckCrpr *check_crpr_;
   Genclks *genclks_;
+
+  LibertyVisitor *liberty_visitor_;
+
+  // For design_area.
+  void findDesignArea(float &total_area,
+                      // Return value.
+                      LibertyCellAreaMap *cell_areas)
+    const;
+
+  // New members for TNS per path group
+  // Map from path group to TNS values (indexed by path analysis point)
+  std::map<PathGroup*, SlackSeq> path_group_tns_;
+  // Map from path group to vertex-slack maps (for detailed path information)
+  std::map<PathGroup*, VertexSlackMapSeq> path_group_tns_slacks_;
+  // Flag indicating if path group TNS values have been calculated
+  bool path_group_tns_exists_ = false;
+  // Set of vertices with invalid path group TNS values
+  VertexSet *invalid_path_group_tns_ = nullptr;
+
+  // New private helper for TNS by path group calculation
+  void updatePathGroupTns(Vertex *vertex, SlackSeq &slacks);
+  void pathGroupTnsIncr(PathGroup* pg, Vertex* vertex, Slack slack, PathAPIndex path_ap_index);
+  void pathGroupTnsDecr(PathGroup* pg, Vertex* vertex, PathAPIndex path_ap_index);
+
+private:
+  void init();
+  // For use by Sta only.
+  void setLibertyVisitor(LibertyVisitor *visitor) { liberty_visitor_ = visitor; }
+
+  void setPinVoltage(const Pin *pin,
+		     const MinMax *min_max,
+		     Pvt *pvt,
+		     float voltage);
+
 };
 
 // Eval across latch D->Q edges.
@@ -874,5 +937,7 @@ protected:
 
   TagGroupBldr *tag_bldr_;
 };
+
+PathGroups *makePathGroupsDefault();
 
 } // namespace

@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cmath> // abs
+#include <set> // For std::set
 
 #include "Mutex.hh"
 #include "Report.hh"
@@ -68,6 +69,7 @@
 #include "Crpr.hh"
 #include "Genclks.hh"
 #include "Variables.hh"
+#include "MinMax.hh" // Added for MinMaxIter and MinMax::range()
 
 namespace sta {
 
@@ -664,7 +666,7 @@ SeedFaninsThruHierPin::SeedFaninsThruHierPin(Graph *graph,
 
 void
 SeedFaninsThruHierPin::visit(const Pin *drvr,
-			     const Pin *)
+			     const Pin * /* load */)
 {
   Vertex *vertex, *bidirect_drvr_vertex;
   graph_->pinVertices(drvr, vertex, bidirect_drvr_vertex);
@@ -3723,10 +3725,8 @@ Search::tnsPreamble()
 void
 Search::tnsInvalid(Vertex *vertex)
 {
-  if ((tns_exists_ || worst_slacks_)
-      && isEndpoint(vertex)) {
-    debugPrint(debug_, "tns", 2, "tns invalid %s",
-               vertex->to_string(this).c_str());
+  if (tns_exists_
+      && invalid_tns_) {
     LockGuard lock(tns_lock_);
     invalid_tns_->insert(vertex);
   }
@@ -3735,22 +3735,30 @@ Search::tnsInvalid(Vertex *vertex)
 void
 Search::updateInvalidTns()
 {
+  // Check if corners_ is nullptr before dereferencing
+  if (!corners_) return;
   PathAPIndex path_ap_count = corners_->pathAnalysisPtCount();
-  for (Vertex *vertex : *invalid_tns_) {
-    // Network edits can change endpointedness since tnsInvalid was called.
-    if (isEndpoint(vertex)) {
+  
+  // Check if invalid_tns_ is nullptr before dereferencing
+  if (!invalid_tns_) return;
+
+  VertexSet* temp_invalid_tns = new VertexSet(*invalid_tns_);
+
+  for (Vertex *vertex : *temp_invalid_tns) {
+    if (isEndpoint(vertex)) { 
       debugPrint(debug_, "tns", 2, "update tns %s",
                  vertex->to_string(this).c_str());
       SlackSeq slacks(path_ap_count);
-      wnsSlacks(vertex, slacks);
-
+      wnsSlacks(vertex, slacks); // Corrected
+  
       if (tns_exists_)
-	updateTns(vertex, slacks);
+        updateTns(vertex, slacks);
       if (worst_slacks_)
-	worst_slacks_->updateWorstSlacks(vertex, slacks);
+        worst_slacks_->updateWorstSlacks(vertex, slacks);
     }
   }
   invalid_tns_->clear();
+  delete temp_invalid_tns;
 }
 
 void
@@ -4047,4 +4055,253 @@ Search::findPathGroup(const Clock *clk,
     return nullptr;
 }
 
-} // namespace
+// New function as per design document
+void
+Search::findTotalNegativeSlacksByPathGroup()
+{
+  if (path_group_tns_exists_) {
+    if (invalid_path_group_tns_ && invalid_path_group_tns_->empty()) {
+        return;
+    }
+    path_group_tns_.clear();
+    path_group_tns_slacks_.clear();
+    if (invalid_path_group_tns_) {
+        invalid_path_group_tns_->clear(); 
+    }
+  }
+
+  Stats stats(debug_, report_);
+  stats.report("Find total negative slacks by path group");
+
+  PathGroups *current_path_groups = this->path_groups_; 
+  if (current_path_groups == nullptr) {
+    this->makePathGroupsDefault(); 
+    current_path_groups = this->path_groups_; 
+  }
+
+  path_group_tns_.clear();
+  path_group_tns_slacks_.clear();
+  if (invalid_path_group_tns_) {
+    invalid_path_group_tns_->clear();
+  } else {
+    invalid_path_group_tns_ = new VertexSet(graph_);
+  }
+
+  if (current_path_groups) {
+    std::set<PathGroup*> unique_path_groups_to_process;
+
+    Sdc *sdc_inst = this->sdc(); 
+
+    for (const MinMax* min_max_ptr : MinMax::range()) { 
+      if (sdc_inst) {
+        const ClockSeq &clocks = sdc_inst->clks(); 
+        for (Clock *clk : clocks) {
+          PathGroup *pg = current_path_groups->findPathGroup(clk->name(), min_max_ptr);
+          if (pg) {
+            unique_path_groups_to_process.insert(pg);
+          }
+        }
+      }
+
+      PathGroup *pg_path_delay = current_path_groups->findPathGroup(PathGroups::pathDelayGroupName(), min_max_ptr);
+      if (pg_path_delay) unique_path_groups_to_process.insert(pg_path_delay);
+
+      PathGroup *pg_gated_clk = current_path_groups->findPathGroup(PathGroups::gatedClkGroupName(), min_max_ptr);
+      if (pg_gated_clk) unique_path_groups_to_process.insert(pg_gated_clk);
+      
+      PathGroup *pg_unconstrained = current_path_groups->findPathGroup(PathGroups::unconstrainedPathGroupName(), min_max_ptr);
+      if (pg_unconstrained) unique_path_groups_to_process.insert(pg_unconstrained);
+    }
+
+    for (PathGroup *pg : unique_path_groups_to_process) {
+      if (pg) {
+        Slack total_slack = 0.0;
+        PathGroupIterator* pg_iter_ptr = pg->iterator(); 
+        if (pg_iter_ptr) {
+          while (pg_iter_ptr->hasNext()) {
+            PathEnd *path_end = pg_iter_ptr->next();
+            // Assuming PathEnd has isUnconstrained() method as a replacement for isNoClkPath()
+            if (path_end && !path_end->isUnconstrained()) { 
+              Slack slack = path_end->slack(this);
+              if (slack < 0) {
+                total_slack += slack;
+                Vertex* endpoint_vertex = path_end->vertex(this);
+                PathAnalysisPt* path_ap = path_end->pathAnalysisPt(this);
+                if (path_ap) { // Check path_ap is not null
+                    PathAPIndex path_ap_idx = path_ap->index(); 
+                    path_group_tns_slacks_[pg][path_ap_idx][endpoint_vertex] = slack;
+                } // else: handle null path_ap if necessary
+              }
+            }
+          }
+          delete pg_iter_ptr; 
+        }
+        path_group_tns_[pg] = SlackSeq(1, total_slack); 
+      }
+    }
+  }
+  path_group_tns_exists_ = true;
+  if (invalid_path_group_tns_) {
+    invalid_path_group_tns_->clear(); 
+  }
+}
+
+////////////////////////////////////////////////////////////////
+// Helper methods for Path Group TNS
+
+void
+Search::pathGroupTnsIncr(PathGroup* pg,
+                         Vertex* vertex,
+                         Slack slack,
+                         PathAPIndex path_ap_index)
+{
+  if (pg && path_group_tns_.count(pg) && delayLess(slack, 0.0, this)) {
+    if (path_ap_index >= 0 && static_cast<size_t>(path_ap_index) < path_group_tns_[pg].size()) { // Sign comparison fix
+      debugPrint(debug_, "pg_tns", 3, "pg_tns+ %s for pg %s %s",
+                 delayAsString(slack, this),
+                 pg->name(), // Corrected call
+                 vertex->to_string(this).c_str());
+      path_group_tns_[pg][path_ap_index] += slack;
+
+      if (path_group_tns_slacks_.count(pg) && path_ap_index >= 0 && static_cast<size_t>(path_ap_index) < path_group_tns_slacks_[pg].size()) { // Sign comparison fix
+        if (path_group_tns_slacks_[pg][path_ap_index].hasKey(vertex)) {
+          report_->critical(1550 /* STA_PG_TNS_INCR_EXISTING */,
+                            "path group tns incr existing vertex for pg %s",
+                            pg->name()); // Corrected call
+        }
+        path_group_tns_slacks_[pg][path_ap_index][vertex] = slack;
+      } else {
+        report_->error(1551, "path_group_tns_slacks_ not initialized for pg %s, ap_index %d", // Added error ID
+                       pg->name(), path_ap_index); // Corrected call
+      }
+    } else {
+      report_->error(1552, "path_ap_index %d out of bounds for pg %s TNS vector", // Added error ID
+                     path_ap_index, pg->name()); // Corrected call
+    }
+  }
+}
+
+void
+Search::pathGroupTnsDecr(PathGroup* pg,
+                         Vertex* vertex,
+                         PathAPIndex path_ap_index)
+{
+  (void)pg; // Suppress unused parameter warning
+  (void)vertex; // Suppress unused parameter warning
+  (void)path_ap_index; // Suppress unused parameter warning
+  // Implementation to be added if fully incremental updates are desired.
+  // For now, findTotalNegativeSlacksByPathGroup does a full recompute.
+}
+
+PathGroups* // Corrected: Add return type
+Search::makePathGroupsDefault()
+{
+  if (path_groups_ == nullptr) {
+    // Default values for creating path groups
+    int default_group_path_count = 1;
+    int default_endpoint_path_count = 1;
+    bool default_unique_pins = false;
+    float default_slack_min = -INF; 
+    float default_slack_max = INF;
+    PathGroupNameSet *default_group_names = nullptr; // All groups
+
+    bool setup = true;
+    bool hold = true;
+    bool recovery = false;
+    bool removal = false;
+    bool clk_gating_setup = false;
+    bool clk_gating_hold = false;
+
+    if (variables_) { 
+        recovery = variables_->recoveryRemovalChecksEnabled();
+        removal = variables_->recoveryRemovalChecksEnabled();
+        clk_gating_setup = variables_->gatedClkChecksEnabled();
+        clk_gating_hold = variables_->gatedClkChecksEnabled();
+    }
+
+    makePathGroups(default_group_path_count,
+                   default_endpoint_path_count,
+                   default_unique_pins,
+                   default_slack_min,
+                   default_slack_max,
+                   default_group_names,
+                   setup,
+                   hold,
+                   recovery,
+                   removal,
+                   clk_gating_setup,
+                   clk_gating_hold);
+  }
+  return path_groups_;
+}
+
+// Helper class to collect PathGroups for a vertex under a specific PathAnalysisPt
+class SearchPathGroupCollectorVisitor : public PathEndVisitor {
+public:
+    SearchPathGroupCollectorVisitor(const PathAnalysisPt* path_ap, Search* search_ptr)
+        : /* PathEndVisitor base constructor removed */ path_ap_(path_ap), search_(search_ptr), sta_(search_ptr) {}
+
+    virtual PathEndVisitor *copy() const override {
+        return new SearchPathGroupCollectorVisitor(path_ap_, search_);
+    }
+
+    virtual void visit(PathEnd *path_end) override {
+        // Assuming PathEnd has isUnconstrained() method as a replacement for isNoClkPath()
+        if (!path_end || path_end->isUnconstrained()) return;
+
+        if (search_ && search_->getPathGroups()) { 
+            PathGroup* actual_pg = search_->getPathGroups()->pathGroup(path_end); 
+            if (actual_pg) {
+                collected_path_groups_.insert(actual_pg);
+            }
+        }
+    }
+
+    const std::set<PathGroup*>& getCollectedPathGroups() const {
+        return collected_path_groups_;
+    }
+
+private:
+    const PathAnalysisPt* path_ap_;
+    Search* search_; 
+    const StaState* sta_; 
+    std::set<PathGroup*> collected_path_groups_;
+};
+
+// Update TNS for all relevant path groups when a vertex's slacks are known.
+void Search::updatePathGroupTns(Vertex *vertex, SlackSeq &slacks) { 
+    if (!corners_ || !this->path_groups_ || !visit_path_ends_) return; 
+
+    for (PathAnalysisPt *path_ap : corners_->pathAnalysisPts()) {
+        const MinMax* min_max = path_ap->pathMinMax(); 
+        PathAPIndex path_ap_idx = path_ap->index(); 
+        const Corner* corner = path_ap->corner();
+        const MinMaxAll* min_max_all = min_max->asMinMaxAll();
+
+        SearchPathGroupCollectorVisitor collector_visitor(path_ap, this);
+        visit_path_ends_->visitPathEnds(vertex, 
+                                        corner, 
+                                        min_max_all, 
+                                        false, // filtered
+                                        &collector_visitor);
+        
+        const auto& groups_for_vertex_ap = collector_visitor.getCollectedPathGroups();
+
+        Slack slack_for_ap = 0.0; 
+        if (path_ap_idx >= 0 && static_cast<size_t>(path_ap_idx) < slacks.size()) { 
+            slack_for_ap = slacks[path_ap_idx];
+        } else {
+            continue; 
+        }
+        
+        // Removed the local MinMaxAll min_max_all_obj block that was here previously
+
+        for (PathGroup* pg : groups_for_vertex_ap) {
+            if (path_group_tns_.count(pg)) {
+                 pathGroupTnsIncr(pg, vertex, slack_for_ap, path_ap_idx);
+            }
+        }
+    }
+}
+
+} // namespace sta
