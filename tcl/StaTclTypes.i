@@ -275,53 +275,35 @@ using namespace sta;
 //
 ////////////////////////////////////////////////////////////////
 
-// String that is deleted after crossing over to tcland.
-%typemap(out) string {
-  string &str = $1;
-  // String is volatile because it is deleted.
-  Tcl_SetResult(interp, const_cast<char*>(str.c_str()), TCL_VOLATILE);
-}
-
-// String that is deleted after crossing over to tcland.
-%typemap(out) TmpString* {
-  string *str = $1;
-  if (str) {
-    // String is volatile because it is deleted.
-    Tcl_SetResult(interp, const_cast<char*>(str->c_str()), TCL_VOLATILE);
-    delete str;
+// Helper functions for TNS path group reporting
+%inline %{
+  void report_path_group_tns(PathGroup *path_group,
+                           const MinMaxAll *min_max,
+                           int digits) {
+    Sta *sta = Sta::sta();
+    if (sta) {
+      sta->search()->reportTotalNegativeSlacks(path_group, min_max, digits);
+    }
   }
-  else
-    Tcl_SetResult(interp, nullptr, TCL_STATIC);
-}
-
-%typemap(in) StringSeq* {
-  $1 = tclListSeqConstChar($input, interp);
-}
-
-%typemap(in) StdStringSet* {
-  $1 = tclListSetStdString($input, interp);
-}
-
-%typemap(out) StringSeq* {
-  StringSeq *strs = $1;
-  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
-  for (const char *str : *strs) {
-    Tcl_Obj *obj = Tcl_NewStringObj(str, strlen(str));
-    Tcl_ListObjAppendElement(interp, list, obj);
+  
+  void report_tns_groups(const MinMaxAll *min_max,
+                        int digits) {
+    Sta *sta = Sta::sta();
+    if (sta) {
+      sta->search()->reportTotalNegativeSlacksByPathGroup(min_max, digits);
+    }
   }
-  Tcl_SetObjResult(interp, list);
-}
-
-%typemap(out) StringSeq {
-  StringSeq &strs = $1;
-  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
-  for (const char *str : strs) {
-    Tcl_Obj *obj = Tcl_NewStringObj(str, strlen(str));
-    Tcl_ListObjAppendElement(interp, list, obj);
+  
+  PathGroup *get_path_group_arg(const char *path_group_name) {
+    Sta *sta = Sta::sta();
+    if (sta) {
+      return sta->search()->findPathGroup(path_group_name, nullptr);
+    }
+    return nullptr;
   }
-  Tcl_SetObjResult(interp, list);
-}
+%}
 
+// Typemaps from Library* onwards are kept.
 %typemap(out) Library* {
   Tcl_Obj *obj = SWIG_NewInstanceObj($1, $1_descriptor, false);
   Tcl_SetObjResult(interp, obj);
@@ -1412,11 +1394,6 @@ using namespace sta;
   }
 }
 
-%typemap(in) ArcDcalcArg {
-  Tcl_Obj *const source = $input;
-  $1 = arcDcalcArgTcl(source, interp);
-}
-
 %typemap(out) ArcDcalcArg {
   Tcl_Obj *tcl_obj = tclArcDcalcArg($1, interp);
   Tcl_SetObjResult(interp, tcl_obj);
@@ -1448,3 +1425,52 @@ using namespace sta;
   }
   Tcl_SetObjResult(interp, list);
 }
+
+// String that is deleted after crossing over to tcland.
+%typemap(out) string {
+  string &str = $1;
+  // String is volatile because it is deleted.
+  Tcl_SetResult(interp, const_cast<char*>(str.c_str()), TCL_VOLATILE);
+}
+
+// String that is deleted after crossing over to tcland.
+%typemap(out) TmpString* {
+  string *str = $1;
+  if (str) {
+    // String is volatile because it is deleted.
+    Tcl_SetResult(interp, const_cast<char*>(str->c_str()), TCL_VOLATILE);
+    delete str;
+  }
+  else
+    Tcl_SetResult(interp, nullptr, TCL_STATIC);
+}
+
+%typemap(in) StringSeq* {
+  $1 = tclListSeqConstChar($input, interp);
+}
+
+%typemap(in) StdStringSet* {
+  $1 = tclListSetStdString($input, interp);
+}
+
+%typemap(out) StringSeq* {
+  StringSeq *strs = $1;
+  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
+  for (const char *str : *strs) {
+    Tcl_Obj *obj = Tcl_NewStringObj(str, strlen(str));
+    Tcl_ListObjAppendElement(interp, list, obj);
+  }
+  Tcl_SetObjResult(interp, list);
+}
+
+%typemap(out) StringSeq {
+  StringSeq &strs = $1;
+  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
+  for (const char *str : strs) {
+    Tcl_Obj *obj = Tcl_NewStringObj(str, strlen(str));
+    Tcl_ListObjAppendElement(interp, list, obj);
+  }
+  Tcl_SetObjResult(interp, list);
+}
+
+

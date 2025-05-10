@@ -256,6 +256,10 @@ Search::init(StaState *sta)
   filter_to_ = nullptr;
   filtered_arrivals_ = new VertexSet(graph_);
   found_downstream_clk_pins_ = false;
+
+  // Initialize path group TNS data members
+  path_group_tns_exists_ = false;
+  invalid_path_group_tns_ = nullptr;
 }
 
 // Init "options".
@@ -295,6 +299,9 @@ Search::~Search()
   delete genclks_;
   delete filtered_arrivals_;
   deleteFilter();
+
+  // Delete path group TNS data members
+  delete invalid_path_group_tns_;
 }
 
 void
@@ -322,6 +329,13 @@ Search::clear()
   deleteFilter();
   genclks_->clear();
   found_downstream_clk_pins_ = false;
+
+  // Clear path group TNS data members
+  path_group_tns_.clear();
+  path_group_tns_slacks_.clear();
+  path_group_tns_exists_ = false;
+  delete invalid_path_group_tns_;
+  invalid_path_group_tns_ = nullptr;
 }
 
 bool
@@ -4202,11 +4216,22 @@ Search::pathGroupTnsDecr(PathGroup* pg,
                          Vertex* vertex,
                          PathAPIndex path_ap_index)
 {
-  (void)pg; // Suppress unused parameter warning
-  (void)vertex; // Suppress unused parameter warning
-  (void)path_ap_index; // Suppress unused parameter warning
-  // Implementation to be added if fully incremental updates are desired.
-  // For now, findTotalNegativeSlacksByPathGroup does a full recompute.
+  // This function is mainly for incremental updates.
+  // For now, ensure the map entry exists before trying to erase.
+  if (path_group_tns_slacks_.count(pg)
+      && static_cast<size_t>(path_ap_index) < path_group_tns_slacks_[pg].size())
+  {
+    auto& vertex_slacks = path_group_tns_slacks_[pg][path_ap_index];
+    if (vertex_slacks.count(vertex)) {
+      Slack old_slack = vertex_slacks[vertex];
+      // Ensure path_group_tns_ also has the entry and ap_index is valid
+      if (path_group_tns_.count(pg)
+          && static_cast<size_t>(path_ap_index) < path_group_tns_[pg].size()) {
+           path_group_tns_[pg][path_ap_index] -= old_slack;
+      }
+      vertex_slacks.erase(vertex);
+    }
+  }
 }
 
 PathGroups* // Corrected: Add return type
@@ -4319,5 +4344,159 @@ void Search::updatePathGroupTns(Vertex *vertex, SlackSeq &slacks) {
         }
     }
 }
+
+void
+Search::reportTotalNegativeSlacksByPathGroup(const MinMaxAll *min_max,
+                                             int digits)
+{
+  // Ensure path group TNS values are calculated
+  findTotalNegativeSlacksByPathGroup();
+
+  report_->reportLine("Path Group          Corner              Min/Max    Total Negative Slack");
+  report_->reportLine("--------------------------------------------------------------------");
+
+  for (auto const& [path_group, tns_seq] : path_group_tns_) {
+    if (!path_group) {
+      continue;
+    }
+    const char *path_group_name = path_group->name();
+
+    for (PathAPIndex ap_index = 0; ap_index < corners_->pathAnalysisPtCount(); ap_index++) {
+      const PathAnalysisPt *path_ap = corners_->findPathAnalysisPt(ap_index);
+      if (!path_ap) {
+        continue;
+      }
+      
+      const MinMax *path_min_max = path_ap->pathMinMax();
+
+      if (!min_max->matches(path_min_max)) {
+        continue;
+      }
+
+      if (static_cast<size_t>(ap_index) >= tns_seq.size()) { // Cast for comparison
+        continue;
+      }
+      Slack path_group_tns_val = tns_seq[ap_index];
+
+      if (path_group_tns_val < 0.0) {
+        const Corner *corner = path_ap->corner();
+        const char *corner_name = (corner) ? corner->name() : "unknown";
+        const char *min_max_str = path_min_max->to_string().c_str(); // Corrected: Use to_string().c_str()
+
+        report_->reportLine("%-20s %-20s %-10s %s",
+                           path_group_name,
+                           corner_name,
+                           min_max_str,
+                           delayAsString(path_group_tns_val, this, digits)); // Corrected: Pass 'this' (StaState*) for delayAsString
+      }
+    }
+  }
+}
+
+void
+Search::reportTotalNegativeSlacks(const PathGroup *path_group,
+                                  const MinMaxAll *min_max,
+                                  int digits)
+{
+  findTotalNegativeSlacksByPathGroup();
+
+  if (!path_group) {
+    report_->error(7001 /* STA_ERR_SEARCH_PG_NULL */, "Path group pointer is null."); // Added error ID
+    return;
+  }
+
+  auto it = path_group_tns_.find(const_cast<PathGroup*>(path_group));
+  if (it == path_group_tns_.end()) {
+    report_->error(7002 /* STA_ERR_SEARCH_PG_NOT_FOUND */, "Path group '%s' not found in TNS results.",
+                   path_group->name()); // Added error ID
+    return;
+  }
+
+  const SlackSeq& tns_seq = it->second;
+  const char *path_group_name = path_group->name();
+
+  report_->reportLine("Path Group          Corner              Min/Max    Total Negative Slack");
+  report_->reportLine("--------------------------------------------------------------------");
+
+  bool found_tns = false;
+  for (PathAPIndex ap_index = 0; ap_index < corners_->pathAnalysisPtCount(); ap_index++) {
+    const PathAnalysisPt *path_ap = corners_->findPathAnalysisPt(ap_index);
+    if (!path_ap) continue;
+
+    const MinMax *path_min_max = path_ap->pathMinMax();
+    if (!min_max->matches(path_min_max)) {
+      continue;
+    }
+
+    if (static_cast<size_t>(ap_index) >= tns_seq.size()) { // Cast for comparison
+      continue;
+    }
+    Slack tns_value = tns_seq[ap_index];
+
+    if (tns_value < 0.0) {
+      found_tns = true;
+      const Corner *corner = path_ap->corner();
+      const char *corner_name = (corner) ? corner->name() : "unknown";
+      const char *min_max_str = path_min_max->to_string().c_str(); // Corrected: Use to_string().c_str()
+
+      report_->reportLine("%-20s %-20s %-10s %s",
+                         path_group_name,
+                         corner_name,
+                         min_max_str,
+                         delayAsString(tns_value, this, digits)); // Corrected: Pass 'this' (StaState*) for delayAsString
+    }
+  }
+
+  if (!found_tns) {
+    // Optionally report if no negative slack was found for this specific group under these conditions
+    // report_->reportLine("No negative slack found for path group '%s' matching criteria.", path_group_name);
+  }
+}
+
+Slack
+Search::totalNegativeSlack(const PathGroup *path_group, const MinMax *min_max)
+{
+  findTotalNegativeSlacksByPathGroup();
+
+  if (!path_group) {
+    report_->warn(7003 /* STA_WARN_SEARCH_PG_NULL_FOR_SLACK */, "Path group pointer is null when querying totalNegativeSlack.");
+    return 0.0; // Return non-negative for error or no TNS
+  }
+
+  if (!min_max) {
+    report_->warn(7004 /* STA_WARN_SEARCH_MM_NULL_FOR_SLACK */, "MinMax pointer is null for path_group '%s' when querying totalNegativeSlack.", path_group->name());
+    return 0.0; // Return non-negative for error or no TNS
+  }
+
+  auto it = path_group_tns_.find(const_cast<PathGroup*>(path_group));
+  if (it == path_group_tns_.end()) {
+    report_->warn(7005 /* STA_WARN_SEARCH_PG_NOT_FOUND_FOR_SLACK */, "Path group '%s' not found in TNS results when querying totalNegativeSlack.", path_group->name());
+    return 0.0; // Not found, so no TNS
+  }
+
+  const SlackSeq& tns_seq = it->second;
+  Slack cumulative_tns = 0.0;
+
+  for (PathAPIndex ap_index = 0; ap_index < corners_->pathAnalysisPtCount(); ap_index++) {
+    const PathAnalysisPt *path_ap = corners_->findPathAnalysisPt(ap_index);
+    if (!path_ap) continue;
+
+    // We need to match the specific MinMax object given, not just type (min/max)
+    if (path_ap->pathMinMax() == min_max) {
+      if (static_cast<size_t>(ap_index) < tns_seq.size()) { // Cast for comparison
+        Slack tns_value = tns_seq[ap_index];
+        if (tns_value < 0.0) {
+          cumulative_tns += tns_value; // Accumulate if multiple corners share exact MinMax and are negative
+        }
+      } else {
+        report_->warn(7006 /* STA_WARN_SEARCH_PG_AP_MISSING_FOR_SLACK */, "TNS data missing for path_group %s at ap_index %d for MinMax %s", path_group->name(), ap_index, min_max->to_string().c_str());
+      }
+    }
+  }
+  return cumulative_tns; // Will be 0.0 if no negative slack or not found
+}
+
+// reportPins
+// ... existing code ...
 
 } // namespace sta
