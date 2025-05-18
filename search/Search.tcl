@@ -714,10 +714,20 @@ proc_redirect report_tns {
     flags {-min -max -by_path_group -nosplit}
 
   # Process min/max flags
-  set min_max_obj [parse_min_max_all_args flags]
+  set min_max "max"
+  if { [info exists flags(-min)] } {
+    set min_max "min"
+  }
+  if { [info exists flags(-max)] } {
+    set min_max "max"
+  }
 
   # Get digits precision
-  set digits [get_digits_key keys]
+  set digits 2
+  if { [info exists keys(-digits)] } {
+    set digits $keys(-digits)
+    check_positive_integer "-digits" $digits
+  }
 
   # Process path group filtering
   set path_group_name ""
@@ -729,39 +739,36 @@ proc_redirect report_tns {
     sta_error 530 "Cannot use -by_path_group and -path_group simultaneously."
     return ""
   }
-  
-  set format [get_format_key keys]
-  set nosplit [info exists flags(-nosplit)]
-  
+
   if { [info exists flags(-by_path_group)] } {
-    # Call new C++ function for reporting TNS by each path group
-    sta::report_tns_by_path_group $min_max_obj $digits $format $nosplit
+    # Call C++ function for reporting TNS by each path group
+    report_tns_by_path_group $min_max $digits
   } elseif { $path_group_name != "" } {
-    # Call new C++ function for reporting TNS for a specific path group
-    sta::report_tns_path_group $path_group_name $min_max_obj $digits $format $nosplit
+    # Call C++ function for reporting TNS for a specific path group
+    set path_group [get_path_group_arg $path_group_name]
+    if { $path_group != "NULL" } {
+      report_path_group_tns $path_group $min_max $digits
+    } else {
+      sta_error 531 "Path group '$path_group_name' not found."
+    }
   } else {
     # Original behavior
-    sta::report_tns $min_max_obj $digits $format $nosplit
+    report_line "tns $min_max [format_time [total_negative_slack_cmd $min_max] $digits]"
   }
 }
 
 # Helper proc to report TNS for a specific path group
-proc sta::report_tns_path_group { path_group_name min_max_obj digits format nosplit } {
-  # Reverted: get_path_group_arg now only takes path_group_name
+proc report_tns_path_group { path_group_name min_max_obj digits format nosplit } {
   set path_group [get_path_group_arg $path_group_name]
   if { $path_group != "NULL" } {
     report_path_group_tns $path_group $min_max_obj $digits $format $nosplit
   } else {
-    # Original simpler error message is fine now
     sta_error 531 "Path group '$path_group_name' not found."
   }
 }
 
 # Helper proc to report TNS for all path groups
-proc sta::report_tns_by_path_group { min_max_obj digits format nosplit } {
-  # Assuming report_tns_groups is the SWIG function for Search::reportTotalNegativeSlacksByPathGroup(MinMaxAll*, int)
-  # It will need to handle format and nosplit internally or via more args if necessary.
-  # For now, passing them along, assuming the C++ side or SWIG handles them.
+proc report_tns_by_path_group { min_max_obj digits format nosplit } {
   report_tns_groups $min_max_obj $digits $format $nosplit
 }
 

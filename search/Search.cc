@@ -4006,8 +4006,8 @@ void
 Search::makePathGroups(int group_path_count,
 		       int endpoint_path_count,
 		       bool unique_pins,
-		       float slack_min,
-		       float slack_max,
+		       float min_slack,
+		       float max_slack,
 		       PathGroupNameSet *group_names,
 		       bool setup,
 		       bool hold,
@@ -4016,15 +4016,26 @@ Search::makePathGroups(int group_path_count,
 		       bool clk_gating_setup,
 		       bool clk_gating_hold)
 {
+  delete path_groups_;
   path_groups_ = new PathGroups(group_path_count, endpoint_path_count,
-			        unique_pins,
-                                slack_min, slack_max,
-                                group_names,
-                                setup, hold,
-                                recovery, removal,
-                                clk_gating_setup, clk_gating_hold,
-                                unconstrained_paths_,
-                                this);
+                               unique_pins, min_slack, max_slack,
+                               group_names, setup, hold, recovery, removal,
+                               clk_gating_setup, clk_gating_hold);
+
+  // Ensure path groups are created for all SDC group_path commands
+  Sdc *sdc = this->sdc();
+  if (sdc) {
+    const GroupPathMap &group_paths = sdc->groupPaths();
+    for (const auto &[name, group_path] : group_paths) {
+      for (const MinMax *min_max : MinMax::range()) {
+        PathGroup *pg = path_groups_->findPathGroup(name.c_str(), min_max);
+        if (!pg) {
+          // Create path group if it doesn't exist
+          path_groups_->makePathGroup(name.c_str(), min_max);
+        }
+      }
+    }
+  }
 }
 
 void
@@ -4075,105 +4086,64 @@ Search::findTotalNegativeSlacksByPathGroup()
 {
   if (path_group_tns_exists_) {
     if (invalid_path_group_tns_ && invalid_path_group_tns_->empty()) {
-        return; // Already computed and no invalidations
+      return; // Already computed and no invalidations
     }
     // Clear old values if recomputing due to invalidations
     path_group_tns_.clear();
     path_group_tns_slacks_.clear();
     if (invalid_path_group_tns_) {
-        invalid_path_group_tns_->clear();
+      invalid_path_group_tns_->clear();
     }
   }
 
   Stats stats(debug_, report_);
   stats.report("Find total negative slacks by path group");
 
-  PathGroups *current_path_groups = this->path_groups_;
+  // Ensure path groups exist
+  if (!path_groups_) {
+    makePathGroupsDefault();
+  }
+
+  PathGroups *current_path_groups = path_groups_;
   if (current_path_groups == nullptr) {
-    this->makePathGroupsDefault();
-    current_path_groups = this->path_groups_;
-    if (current_path_groups == nullptr) {
-        report_->warn(333, "No path groups defined, cannot report TNS by path group.");
-        path_group_tns_exists_ = true; // Mark as 'computed' to avoid re-entry if no groups
-        if (!invalid_path_group_tns_) invalid_path_group_tns_ = new VertexSet(graph_);
-        return;
-    }
+    report_->warn(333, "No path groups defined, cannot report TNS by path group.");
+    path_group_tns_exists_ = true; // Mark as 'computed' to avoid re-entry if no groups
+    if (!invalid_path_group_tns_) invalid_path_group_tns_ = new VertexSet(graph_);
+    return;
   }
-
-  // Collect all relevant path groups to process
-  std::set<PathGroup*> unique_path_groups_to_process;
-  Sdc* sdc_inst = this->sdc(); // Use this->sdc() to get Sdc instance
-
-  for (const MinMax* min_max_ptr : MinMax::range()) {
-    if (sdc_inst) { // Check if sdc_inst is not null
-      for (const Clock* clk : sdc_inst->clks()) {
-        PathGroup *pg = current_path_groups->findPathGroup(clk->name(), min_max_ptr);
-        if (pg) unique_path_groups_to_process.insert(pg);
-      }
-    }
-    // Add special groups by name for the current min_max_ptr
-    PathGroup *pg_path_delay = current_path_groups->findPathGroup(PathGroups::pathDelayGroupName(), min_max_ptr);
-    if (pg_path_delay) unique_path_groups_to_process.insert(pg_path_delay);
-
-    PathGroup *pg_gated_clk = current_path_groups->findPathGroup(PathGroups::gatedClkGroupName(), min_max_ptr);
-    if (pg_gated_clk) unique_path_groups_to_process.insert(pg_gated_clk);
-
-    PathGroup *pg_async = current_path_groups->findPathGroup(PathGroups::asyncPathGroupName(), min_max_ptr);
-    if (pg_async) unique_path_groups_to_process.insert(pg_async);
-
-    PathGroup *pg_unconstrained = current_path_groups->findPathGroup(PathGroups::unconstrainedPathGroupName(), min_max_ptr);
-    if (pg_unconstrained) unique_path_groups_to_process.insert(pg_unconstrained);
-  }
-
 
   // Initialize TNS data structures for each path group
-  for (PathGroup *pg : unique_path_groups_to_process) {
-    if (pg) {
-      path_group_tns_[pg].resize(corners_->pathAnalysisPtCount(), 0.0);
-      path_group_tns_slacks_[pg].resize(corners_->pathAnalysisPtCount());
-      for (int i = 0; i < corners_->pathAnalysisPtCount(); ++i) {
-        path_group_tns_slacks_[pg][i].clear();
-      }
-    }
-  }
-
-  // Re-ensure arrivals and requireds if they don't exist or are invalid
-  if (!arrivals_exist_ || (invalid_arrivals_ && !invalid_arrivals_->empty())) {
-    findAllArrivals();
-  }
-  if (!requireds_exist_ || (invalid_requireds_ && !invalid_requireds_->empty())) {
-    findRequireds();
-  }
-
-  for (PathGroup *pg : unique_path_groups_to_process) {
-    if (!pg) continue;
-
-    const PathEndSeq &path_ends = pg->pathEnds(); // Corrected: Use const PathEndSeq&
-    // Iterate over the path_ends directly
-    for (PathEnd *path_end : path_ends) { // Corrected: Iterate over const reference
-        if (path_end && !path_end->isUnconstrained()) { // Corrected: Use isUnconstrained()
-          Vertex *endpoint_vertex = path_end->vertex(this);
-          const PathAnalysisPt *path_ap = path_end->pathAnalysisPt(this);
-          if (endpoint_vertex && path_ap) {
-            PathAPIndex path_ap_idx = path_ap->index();
-            Slack slack = path_end->slack(this);
-
-            if (slack < 0.0) {
-              path_group_tns_[pg][path_ap_idx] += slack;
-              path_group_tns_slacks_[pg][path_ap_idx][endpoint_vertex] = slack;
-            }
+  Sdc *sdc = this->sdc();
+  if (sdc) {
+    const GroupPathMap &group_paths = sdc->groupPaths();
+    for (const auto &[name, group_path] : group_paths) {
+      for (const MinMax *min_max : MinMax::range()) {
+        PathGroup *pg = current_path_groups->findPathGroup(name.c_str(), min_max);
+        if (pg) {
+          path_group_tns_[pg].resize(corners_->pathAnalysisPtCount(), 0.0);
+          path_group_tns_slacks_[pg].resize(corners_->pathAnalysisPtCount());
+          for (int i = 0; i < corners_->pathAnalysisPtCount(); ++i) {
+            path_group_tns_slacks_[pg][i].clear();
           }
         }
       }
+    }
+  }
+
+  // Iterate through all vertices looking for timing end points
+  VertexIterator vertex_iter(graph_);
+  while (vertex_iter.hasNext()) {
+    Vertex *vertex = vertex_iter.next();
+    if (isTimingEndpoint(vertex)) {
+      SlackSeq slacks;
+      findSlacks(vertex, slacks);
+      updatePathGroupTns(vertex, slacks);
+    }
   }
 
   path_group_tns_exists_ = true;
-  if (!invalid_path_group_tns_) {
-    invalid_path_group_tns_ = new VertexSet(graph_);
-  } else {
-    invalid_path_group_tns_->clear(); // Clear after full recompute
-  }
-  stats.report("Find total negative slacks by path group complete");
+  if (!invalid_path_group_tns_) invalid_path_group_tns_ = new VertexSet(graph_);
+  stats.report("Find total negative slacks by path group");
 }
 
 ////////////////////////////////////////////////////////////////
@@ -4498,5 +4468,61 @@ Search::totalNegativeSlack(const PathGroup *path_group, const MinMax *min_max)
 
 // reportPins
 // ... existing code ...
+
+void
+Search::reportTotalNegativeSlacks(const PathGroup *path_group,
+                                const MinMax *min_max)
+{
+  if (!path_group_tns_exists_) {
+    findTotalNegativeSlacksByPathGroup();
+  }
+
+  if (path_group) {
+    // Find the path group in our data structures
+    bool found = false;
+    for (const auto &pair : path_group_tns_) {
+      if (pair.first == path_group) {
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      report_->warn(334, "Path group '%s' not found in TNS data.", path_group->name());
+      return;
+    }
+
+    // Report TNS for the specific path group
+    for (int i = 0; i < corners_->pathAnalysisPtCount(); i++) {
+      const PathAnalysisPt *path_ap = corners_->findPathAnalysisPt(i);
+      if (path_ap->minMax() == min_max) {
+        float tns = path_group_tns_[path_group][i];
+        if (tns < 0.0) {
+          report_->reportLine("Path Group: %s", path_group->name());
+          report_->reportLine("  Total Negative Slack: %.2f", tns);
+          report_->reportLine("  Number of Violating Paths: %zu", 
+                            path_group_tns_slacks_[path_group][i].size());
+        }
+      }
+    }
+  } else {
+    // Report TNS for all path groups
+    for (const auto &pair : path_group_tns_) {
+      const PathGroup *pg = pair.first;
+      for (int i = 0; i < corners_->pathAnalysisPtCount(); i++) {
+        const PathAnalysisPt *path_ap = corners_->findPathAnalysisPt(i);
+        if (path_ap->minMax() == min_max) {
+          float tns = pair.second[i];
+          if (tns < 0.0) {
+            report_->reportLine("Path Group: %s", pg->name());
+            report_->reportLine("  Total Negative Slack: %.2f", tns);
+            report_->reportLine("  Number of Violating Paths: %zu", 
+                              path_group_tns_slacks_[pg][i].size());
+          }
+        }
+      }
+    }
+  }
+}
 
 } // namespace sta

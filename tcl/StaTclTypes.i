@@ -297,7 +297,11 @@ using namespace sta;
   PathGroup *get_path_group_arg(const char *path_group_name) {
     Sta *sta = Sta::sta();
     if (sta) {
-      return sta->search()->findPathGroup(path_group_name, nullptr);
+      // Try max first
+      PathGroup *pg = sta->search()->findPathGroup(path_group_name, MinMax::max());
+      if (pg) return pg;
+      // Try min if max not found
+      return sta->search()->findPathGroup(path_group_name, MinMax::min());
     }
     return nullptr;
   }
