@@ -2309,8 +2309,8 @@ Sta::setBidirectNetPathsEnabled(bool enabled)
 bool
 Sta::recoveryRemovalChecksEnabled() const
 {
-  return variables_->recoveryRemovalChecksEnabled();
-} 
+  return variables_->recoveryRemovalChecksEnabled(); 
+}
 
 void
 Sta::setRecoveryRemovalChecksEnabled(bool enabled)
@@ -2500,12 +2500,12 @@ Sta::findPathEnds(ExceptionFrom *from,
 void
 Sta::searchPreamble()
 {
+  ensureGraph();
+  ensureLevelized();
+  // Don't delete path groups - this is the fix for the preservation issue
+  // search_->deletePathGroups();
   findDelays();
   updateGeneratedClks();
-  sdc_->searchPreamble();
-  // Delete results from last findPathEnds because they point to filtered arrivals.
-  search_->deletePathGroups();
-  search_->deleteFilteredArrivals();
 }
 
 void
