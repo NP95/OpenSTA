@@ -83,6 +83,9 @@
 #include "PathExpanded.hh"
 #include "MakeTimingModel.hh"
 #include "spice/WritePathSpice.hh"
+#include "Clock.hh"
+#include "StringUtil.hh"
+#include <set>
 
 namespace sta {
 
@@ -5789,6 +5792,51 @@ void
 Sta::clkPinsInvalid()
 {
   clk_network_->clkPinsInvalid();
+}
+
+Slack
+Sta::totalNegativeSlackPathGroup(const char *path_group_name, const MinMax *min_max)
+{
+  searchPreamble();
+  Slack tns;
+  search_->findTotalNegativeSlackPathGroup(path_group_name, min_max, tns);
+  return tns;
+}
+
+StringSeq *
+Sta::pathGroupNames()
+{
+  std::set<const char*, CharPtrLess> unique_names;
+  Sdc *sdc_ptr = sdc(); // Get SDC from Sta
+
+  if (sdc_ptr) {
+    // 1. Named groups from SDC group_path commands
+    const GroupPathMap& sdc_defined_groups = sdc_ptr->groupPaths();
+    for (const auto& name_group_pair : sdc_defined_groups) {
+      unique_names.insert(name_group_pair.first);
+    }
+    // 2. Clock names from SDC
+    ClockSeq clocks_seq;
+    sdc_ptr->sortedClocks(clocks_seq);
+    for (Clock* clk : clocks_seq) {
+      if (clk && clk->name()) {
+        unique_names.insert(clk->name());
+      }
+    }
+  }
+
+  // 3. Predefined groups (consistent with Search::findPathGroupTns)
+  // These are conventionally known group names.
+  unique_names.insert("path delay"); // From PathGroups::path_delay_group_name_ (protected)
+  unique_names.insert("gated clock"); // From PathGroups::gated_clk_group_name_ (protected)
+  unique_names.insert(PathGroups::asyncPathGroupName()); // Public static accessor
+
+  // Convert set to StringSeq
+  StringSeq *names = new StringSeq;
+  for (const char* name : unique_names) {
+    names->push_back(name);
+  }
+  return names;
 }
 
 } // namespace

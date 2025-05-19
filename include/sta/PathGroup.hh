@@ -133,6 +133,7 @@ public:
 			   const MinMax *min_max) const;
   PathGroup *findPathGroup(const Clock *clock,
 			   const MinMax *min_max) const;
+  PathGroup *findPathGroup(Vertex *vertex);
   PathGroup *pathGroup(const PathEnd *path_end) const;
   static bool isGroupPathName(const char *group_name);
   static const char *asyncPathGroupName() { return async_group_name_; }

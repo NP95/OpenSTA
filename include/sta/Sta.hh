@@ -936,6 +936,10 @@ public:
 		  // Return values.
 		  Slack &worst_slack,
 		  Vertex *&worst_vertex);
+
+  Slack totalNegativeSlackPathGroup(const char *path_group_name, const MinMax *min_max);
+  StringSeq *pathGroupNames();
+
   VertexPathIterator *vertexPathIterator(Vertex *vertex,
 					 const RiseFall *rf,
 					 const PathAnalysisPt *path_ap);

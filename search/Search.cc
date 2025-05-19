@@ -210,9 +210,11 @@ ClkArrivalSearchPred::searchThru(Edge *edge)
 
 Search::Search(StaState *sta) :
   StaState(sta),
-  sta_(static_cast<Sta*>(sta)), // Initialize the new Sta pointer
+  // crpr_path_pruning_enabled_ and crpr_approx_missing_requireds_ are declared before sta_
   crpr_path_pruning_enabled_(true),
-  crpr_approx_missing_requireds_(true)
+  crpr_approx_missing_requireds_(true),
+  sta_(static_cast<Sta*>(sta))
+  // Note: unconstrained_paths_ is also declared before crpr_flags but not initialized here, assumes initVars() handles it or default constructor.
 {
   init(sta);
 }
@@ -4194,13 +4196,19 @@ const char *
 Search::pathGroupName(Vertex *vertex)
 {
   if (path_groups_) {
-    // FIXME: PathGroups class does not have a findPathGroup(Vertex*) method.
-    // This line is based on PLAN.md and may need revision.
-    // PathGroup *path_group = path_groups_->findPathGroup(vertex); // Temporarily commented out to allow compilation
-    // return path_group ? path_group->name() : nullptr;
-    return nullptr; // Temporarily return nullptr
+    // PLAN.md suggests: PathGroup *path_group = path_groups_->findPathGroup(vertex);
+    // This specific method on PathGroups might not exist or might be private.
+    // If this causes a new build error, PathGroups class or this method needs adjustment.
+    PathGroup *path_group = path_groups_->findPathGroup(vertex); 
+    return path_group ? path_group->name() : nullptr;
   }
   return nullptr;
+}
+
+PathGroups *
+Search::pathGroups()
+{
+  return path_groups_;
 }
 
 } // namespace

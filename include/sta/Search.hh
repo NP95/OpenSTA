@@ -425,6 +425,7 @@ public:
   void findPathGroupTns();
   // Get path group name for a vertex
   const char *pathGroupName(Vertex *vertex);
+  PathGroups *pathGroups();
 
 protected:
   void init(StaState *sta);
