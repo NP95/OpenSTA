@@ -409,6 +409,22 @@ public:
   void setTagGroupIndex(const Vertex *vertex,
                         TagGroupIndex tag_index);
 
+  // Map from path group name to TNS value (indexed by path analysis point)
+  typedef Map<const char*, DelayDblSeq, CharPtrLess> PathGroupTnsMap;
+
+  PathGroupTnsMap path_group_tns_;
+  bool path_group_tns_exists_;
+
+  // Calculate TNS for a specific path group
+  void findTotalNegativeSlackPathGroup(const char *path_group_name,
+                                      const MinMax *min_max,
+                                      // Return value.
+                                      Slack &tns);
+  // Calculate TNS for all path groups
+  void findPathGroupTns();
+  // Get path group name for a vertex
+  const char *pathGroupName(Vertex *vertex);
+
 protected:
   void init(StaState *sta);
   void initVars();
