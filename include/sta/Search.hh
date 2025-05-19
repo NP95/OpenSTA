@@ -43,6 +43,7 @@
 
 namespace sta {
 
+class Sta; // Forward declaration
 class BfsFwdIterator;
 class BfsBkwdIterator;
 class SearchPred;
@@ -61,7 +62,7 @@ class DcalcAnalysisPt;
 class VisitPathEnds;
 class GatedClk;
 class CheckCrpr;
-class Genclks;
+class Genclks; // Restoring forward declaration
 class Corner;
 
 typedef Set<ClkInfo*, ClkInfoLess> ClkInfoSet;
@@ -680,6 +681,7 @@ protected:
   GatedClk *gated_clk_;
   CheckCrpr *check_crpr_;
   Genclks *genclks_;
+  Sta *sta_; // Pointer to the main Sta object
 };
 
 // Eval across latch D->Q edges.
