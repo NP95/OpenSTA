@@ -214,6 +214,13 @@ public:
   PathGroup *findPathGroup(const Clock *clk,
 			   const MinMax *min_max) const;
 
+  // New public method to allow PathGroups to call VisitPathEnds::visitPathEnds
+  void publicVisitPathEnds(Vertex* vertex,
+                           Corner* corner,
+                           const MinMaxAll* min_max_all,
+                           bool visit_unconstrained,
+                           PathEndVisitor* visitor);
+
   ////////////////////////////////////////////////////////////////
   //
   // Somewhat protected functions.

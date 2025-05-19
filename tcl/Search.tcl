@@ -1,6 +1,7 @@
 define_cmd_args "report_tns" {[-min] [-max] [-digits digits] [-path_group path_group_name] [-by_path_group]}
 
 proc report_tns { args } {
+  puts "DEBUG: Entered sta::report_tns. Args: $args"
   global sta_report_default_digits
   
   parse_key_args "report_tns" args keys {-digits -path_group} flags {-min -max -by_path_group}

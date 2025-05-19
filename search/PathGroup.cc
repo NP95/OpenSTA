@@ -969,14 +969,89 @@ PathGroups::makeGroupPathEnds(VertexSet *endpoints,
   }
 }
 
+// Helper visitor to find the first PathGroup for a Vertex
+class FirstPathGroupVisitor : public PathEndVisitor {
+public:
+  FirstPathGroupVisitor(const PathGroups* path_groups_ptr,
+                        const MinMax* min_max_context, // Desired MinMax context for PathEnds
+                        const StaState* sta_state)     // For PathEnd::minMax
+    : PathEndVisitor(),
+      path_groups_(path_groups_ptr),
+      desired_min_max_(min_max_context),
+      sta_(sta_state),
+      found_group_(nullptr) {}
+
+  // PathEndVisitor requires a copy() method.
+  FirstPathGroupVisitor *copy() const override {
+    return new FirstPathGroupVisitor(*this);
+  }
+
+  void visit(PathEnd *path_end) override {
+    if (found_group_ || !path_end) {
+      return; // Already found one or invalid path_end
+    }
+
+    // If a specific MinMax context is desired, check if the PathEnd matches it.
+    if (desired_min_max_ && path_end->minMax(sta_) != desired_min_max_) {
+      return;
+    }
+
+    PathGroup *group = path_groups_->pathGroup(path_end);
+    if (group) {
+      found_group_ = group;
+    }
+  }
+
+  PathGroup* getFoundGroup() const { return found_group_; }
+
+private:
+  const PathGroups* path_groups_;
+  const MinMax* desired_min_max_;
+  const StaState* sta_;
+  PathGroup* found_group_;
+};
+
 // Stub implementation for findPathGroup(Vertex *vertex)
 PathGroup *
-PathGroups::findPathGroup(Vertex * /* vertex */) // Allowing unused parameter for stub
+PathGroups::findPathGroup(Vertex *vertex)
 {
-  // FIXME: Needs proper implementation to determine PathGroup from Vertex.
-  // This might involve checking against SDC group_path constraints,
-  // clock domains, or other logic specific to how PathGroups are defined and used.
-  return nullptr;
+  Search *srch = search(); // StaState::search()
+  if (!srch || !srch->corners()) {
+    // Essential components are missing.
+    return nullptr;
+  }
+
+  // Try to find a PathGroup, preferring Max, then Min, then any.
+  // The StaState instance for PathEnd::minMax in the visitor is `this` (PathGroups object).
+
+  // Max context
+  FirstPathGroupVisitor max_visitor(this, MinMax::max(), this);
+  for (Corner* corner : *srch->corners()) {
+    srch->publicVisitPathEnds(vertex, corner, MinMaxAll::max(), true, &max_visitor);
+    if (max_visitor.getFoundGroup()) {
+      return max_visitor.getFoundGroup();
+    }
+  }
+
+  // Min context
+  FirstPathGroupVisitor min_visitor(this, MinMax::min(), this);
+  for (Corner* corner : *srch->corners()) {
+    srch->publicVisitPathEnds(vertex, corner, MinMaxAll::min(), true, &min_visitor);
+    if (min_visitor.getFoundGroup()) {
+      return min_visitor.getFoundGroup();
+    }
+  }
+  
+  // Any context (no specific MinMax for visitor, try all PathEnds)
+  FirstPathGroupVisitor any_visitor(this, nullptr, this);
+  for (Corner* corner : *srch->corners()) {
+    srch->publicVisitPathEnds(vertex, corner, MinMaxAll::all(), true, &any_visitor);
+    if (any_visitor.getFoundGroup()) {
+      return any_visitor.getFoundGroup();
+    }
+  }
+
+  return nullptr; // No PathGroup found for this vertex.
 }
 
 } // namespace

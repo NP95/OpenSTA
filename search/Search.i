@@ -195,6 +195,19 @@ total_negative_slack_corner_cmd(const Corner *corner,
 }
 
 Slack
+total_negative_slack_path_group_cmd(const char *path_group_name,
+                                    const MinMax *min_max)
+{
+  return Sta::sta()->totalNegativeSlackPathGroup(path_group_name, min_max);
+}
+
+StringSeq *
+get_path_group_names_cmd()
+{
+  return Sta::sta()->pathGroupNames();
+}
+
+Slack
 worst_slack_cmd(const MinMax *min_max)
 {
   Slack worst_slack;

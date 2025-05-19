@@ -1,0 +1,58 @@
+DEBUG: Starting pin inspection
+DEBUG: Liberty file read successfully.
+DEBUG: Verilog file read successfully.
+DEBUG: Design linked successfully.
+
+DEBUG: Listing all instances in the design:
+  Instance: _40b645d5da550000_p_Instance
+  Instance: _20da45d5da550000_p_Instance
+  Instance: _40f845d5da550000_p_Instance
+  Instance: _908a45d5da550000_p_Instance
+  Instance: _a0033ed5da550000_p_Instance
+  Instance: _30fe3dd5da550000_p_Instance
+
+DEBUG: Listing pins for each instance:
+
+  Instance: _40b645d5da550000_p_Instance
+    Pin: _50013ed5da550000_p_Pin
+    Pin: _50033ed5da550000_p_Pin
+
+  Instance: _20da45d5da550000_p_Instance
+    Pin: _f0d445d5da550000_p_Pin
+    Pin: _00d645d5da550000_p_Pin
+
+  Instance: _40f845d5da550000_p_Instance
+    Pin: _00f945d5da550000_p_Pin
+    Pin: _50f945d5da550000_p_Pin
+
+  Instance: _908a45d5da550000_p_Instance
+    Pin: _b08f45d5da550000_p_Pin
+    Pin: _109145d5da550000_p_Pin
+    Pin: _308c45d5da550000_p_Pin
+    Pin: _d08d45d5da550000_p_Pin
+    Pin: _e0b345d5da550000_p_Pin
+    Pin: _30b445d5da550000_p_Pin
+
+  Instance: _a0033ed5da550000_p_Instance
+    Pin: _00a845d5da550000_p_Pin
+    Pin: _50a845d5da550000_p_Pin
+    Pin: _90253bd5da550000_p_Pin
+    Pin: _e0253bd5da550000_p_Pin
+    Pin: _80d945d5da550000_p_Pin
+    Pin: _d0d945d5da550000_p_Pin
+
+  Instance: _30fe3dd5da550000_p_Instance
+    Pin: _50d645d5da550000_p_Pin
+    Pin: _30ff3dd5da550000_p_Pin
+    Pin: _80ff3dd5da550000_p_Pin
+    Pin: _d0ff3dd5da550000_p_Pin
+    Pin: _a0f745d5da550000_p_Pin
+    Pin: _f0f745d5da550000_p_Pin
+
+DEBUG: Listing all clocks:
+
+DEBUG: Listing all ports:
+  Port: _d0e636d5da550000_p_Port
+  Port: _90053ed5da550000_p_Port
+  Port: _508745d5da550000_p_Port
+  Port: _b09245d5da550000_p_Port

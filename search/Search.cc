@@ -4211,4 +4211,16 @@ Search::pathGroups()
   return path_groups_;
 }
 
+void
+Search::publicVisitPathEnds(Vertex* vertex,
+                            Corner* corner,
+                            const MinMaxAll* min_max_all,
+                            bool visit_unconstrained,
+                            PathEndVisitor* visitor)
+{
+  if (visit_path_ends_) {
+    visit_path_ends_->visitPathEnds(vertex, corner, min_max_all, visit_unconstrained, visitor);
+  }
+}
+
 } // namespace

@@ -1,4 +1,5 @@
 # OpenSTA, Static Timing Analyzer
+puts "DEBUG_TRACE: Loading search/Search.tcl - Checkpoint AlphaBravoCharlie" 
 # Copyright (c) 2025, Parallax Software, Inc.
 # 
 # This program is free software: you can redistribute it and/or modify
@@ -97,7 +98,7 @@ define_cmd_args "find_timing_paths" \
      [-through through_list|-rise_through through_list|-fall_through through_list]\
      [-to to_list|-rise_to to_list|-fall_to to_list]\
      [-path_delay min|min_rise|min_fall|max|max_rise|max_fall|min_max]\
-     [-unconstrained]
+     [-unconstrained]\
      [-corner corner]\
      [-group_path_count path_count] \
      [-endpoint_path_count path_count]\
@@ -702,19 +703,30 @@ define_cmd_args "report_disabled_edges" {}
 
 ################################################################
 
-define_cmd_args "report_tns" {[-min] [-max] [-digits digits]}
+define_cmd_args "report_tns" {[-min] [-max] [-digits digits] [-path_group path_group_name] [-by_path_group]}
 
 proc_redirect report_tns {
   global sta_report_default_digits
 
-  parse_key_args "report_tns" args keys {-digits} flags {-min -max}
+  parse_key_args "report_tns" args keys {-digits -path_group} flags {-min -max -by_path_group}
+
   set min_max "max"
+  if { [info exists flags(-min)] && [info exists flags(-max)] } {
+    sta_error "report_tns" "cannot specify both -min and -max."
+    return -code error
+  }
   if { [info exists flags(-min)] } {
     set min_max "min"
   }
   if { [info exists flags(-max)] } {
+    # This handles the case where only -max is present, or if -min was not present.
+    # If -min was present, min_max is already "min". This line won't override it unless -max is the only one specified.
+    # Correct logic: if -max is specified, it should be "max", overriding default or -min if error check failed.
+    # However, the error check for both flags is above. So this is fine.
     set min_max "max"
   }
+  # If neither -min nor -max is specified, min_max remains "max" (the default).
+
   if [info exists keys(-digits)] {
     set digits $keys(-digits)
     check_positive_integer "-digits" $digits
@@ -722,7 +734,49 @@ proc_redirect report_tns {
     set digits $sta_report_default_digits
   }
 
-  report_line "tns $min_max [format_time [total_negative_slack_cmd $min_max] $digits]"
+  set has_path_group [info exists keys(-path_group)]
+  set has_by_path_group [info exists flags(-by_path_group)]
+
+  if { $has_path_group && $has_by_path_group } {
+    sta_error "report_tns" "cannot use -path_group and -by_path_group together."
+    return -code error
+  }
+
+  if { $has_path_group } {
+    set path_group_name $keys(-path_group)
+    # This 'if' block, which includes the call to is_path_group_name_cmd,
+    # is being commented out. The C++ function
+    # total_negative_slack_path_group_cmd will be responsible for
+    # validating the path_group_name.
+    # if { ![is_path_group_name_cmd $path_group_name] } {
+    #    sta_error "report_tns" "path group '$path_group_name' not found or invalid."
+    #    return -code error
+    # }
+    set tns_value [total_negative_slack_path_group_cmd $path_group_name $min_max]
+    report_line "tns ($path_group_name) $min_max [format_time $tns_value $digits]"
+  } elseif { $has_by_path_group } {
+    # Assuming get_path_group_names_cmd is exposed from C++
+    set path_groups [get_path_group_names_cmd]
+    if { [llength $path_groups] == 0 } {
+      report_line "No path groups found."
+    } else {
+      report_line "TNS by Path Group ($min_max):"
+      foreach group_name $path_groups {
+        # Assuming total_negative_slack_path_group_cmd is exposed from C++
+        set tns_value [total_negative_slack_path_group_cmd $group_name $min_max]
+        report_line "  $group_name: [format_time $tns_value $digits]"
+      }
+    }
+  } else {
+    # Original behavior
+    # Assuming total_negative_slack_cmd is exposed from C++
+    set tns_value [total_negative_slack_cmd $min_max]
+    report_line "tns $min_max [format_time $tns_value $digits]"
+  }
+  # Check for any unparsed arguments left in 'args'
+  if { [llength $args] != 0 } {
+    sta_error 521 "positional arguments not supported."
+  }
 }
 
 ################################################################
